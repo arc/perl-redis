@@ -205,10 +205,27 @@ sub DESTROY { }
 our $AUTOLOAD;
 
 sub AUTOLOAD {
-  my $self = shift;
+  my $self = $_[0];
 
   my $command = $AUTOLOAD;
   $command =~ s/.*://;
+
+  my $method = $self->__mk_method($AUTOLOAD, $command);
+  goto $method;
+}
+
+sub __mk_method {
+  my $self      = shift;
+  my $full_name = shift;
+  my $command   = shift;
+
+  return sub { shift->__std_cmd($command, @_) };
+}
+
+sub __std_cmd {
+  my $self    = shift;
+  my $command = shift;
+
   $self->__is_valid_command($command);
 
   ## Fast path, no reconnect
