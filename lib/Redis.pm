@@ -367,6 +367,15 @@ sub pipeline {
   return wantarray ? @responses : \@responses;
 }
 
+sub txn_exec {
+  my ($self) = @_;
+
+  my ($responses) = $self->pipeline(sub { $self->exec });
+  confess $$responses  # failure in EXEC, not in queued commands
+    if ref $responses ne 'ARRAY';
+  return wantarray ? @$responses : $responses;
+}
+
 
 ### PubSub
 sub wait_for_messages {
@@ -743,6 +752,36 @@ responses.  For example:
 
 If you try to use C<pipeline> from within a pipeline block, an exception is
 thrown.
+
+
+=head1 Transactions
+
+Redis supports L<transactions|http://redis.io/topics/transactions> in the
+form of the C<MULTI>, C<DISCARD>, and C<EXEC> commands (as well as C<WATCH>
+and C<UNWATCH>).  You can use those in the obvious way:
+
+  $r->multi;
+  $r->get('clunk');
+  $r->get('eth');
+  my ($clunk, $eth) = $r->exec;
+
+However, if any of the queued commands happen to yield an error status when
+the Redis server executes them, then an exception is thrown.  If you need to
+be able to access responses to subsequent commands in that situation, use
+C<txn_exec>; it returns error status as instances of C<Redis::X::Unthrown>,
+as with C<pipeline>.
+
+  $r->multi;
+  $r->set(clunk => 'eth');
+  $r->rpush(clunk => 'oops');
+  my @responses = $r->txn_exec;
+  # $responses[0] is 'OK'
+  # $responses[1] is a Redis::X::Unthrown containing a wrong-type error
+
+Note that syntax errors in the transaction-protected commands still throw
+exceptions; only the C<txn_exec> method suppresses the exceptions.
+
+Calling C<txn_exec> without doing C<multi> first will throw an exception.
 
 
 =head1 Connection Handling

@@ -70,6 +70,21 @@ throws_ok { $r->pipeline(sub { $r->pipeline(sub {}) }) }
   qr/Nested pipelines are forbidden/,
   'no nested pipelines';
 
+subtest 'txn_exec' => sub {
+  is($r->multi, 'OK', 'start MULTI');
+  is($r->set(clunk => 'eth'), 'QUEUED', 'txn command 1 queued');
+  is($r->rpush(clunk => 'oops'), 'QUEUED', 'txn command 2 queued');
+  is($r->get('clunk'), 'QUEUED', 'txn command 3 queued');
+  is_deeply([$r->txn_exec], [
+    'OK',
+    unthrown('ERR Operation against a key holding the wrong kind of value'),
+    'eth',
+  ], 'correct responses, including unthrown error');
+};
+
+throws_ok { $r->txn_exec } qr/ERR EXEC without MULTI/,
+  'txn_exec correctly detects error in its EXEC';
+
 done_testing();
 
 sub placeholder {
