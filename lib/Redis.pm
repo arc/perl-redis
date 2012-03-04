@@ -87,6 +87,28 @@ information to support almost all commands with same piece of code with
 a little help of C<AUTOLOAD>.
 
 
+=head1 RESPONSES
+
+Responses from the Redis server look like one of the following:
+
+=over 4
+
+=item Integers, strings, and successful statuses
+
+Returned as a single Perl scalar containing the relevant value.
+
+=item "Multi-bulk" replies
+
+Returned as a list when the command method was invoked in list context, or
+as a single array ref otherwise.
+
+=item Errors
+
+An exception is thrown containing the error message.
+
+=back
+
+
 =head1 METHODS
 
 =head2 new
