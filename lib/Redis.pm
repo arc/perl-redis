@@ -50,6 +50,11 @@ our $VERSION = '1.926';
     $redis->set('key' => 'value');
     $redis->sort('list', 'DESC');
     $redis->sort(qw{list LIMIT 0 5 ALPHA DESC});
+
+    ## Pipelined requests:
+    my @responses = $redis->pipeline(sub {
+      $redis->set(@$_) for %data;
+    });
     
     ## Publish/Subscribe
     $redis->subscribe(
@@ -104,7 +109,8 @@ as a single array ref otherwise.
 
 =item Errors
 
-An exception is thrown containing the error message.
+Ordinarily, an exception is thrown containing the error message, but see
+also the L</Pipelining> section below.
 
 =back
 
@@ -344,6 +350,24 @@ sub keys {
 }
 
 
+### Pipelining
+sub pipeline {
+  my ($self, $cb) = @_;
+
+  confess("Nested pipelines are forbidden")
+    if $self->{pipelined_commands};
+
+  my @commands;
+  {
+    local $self->{pipelined_commands} = \@commands;
+    $cb->();
+  }
+  local $self->{suppress_exception} = 1;
+  my @responses = map { scalar $self->__read_response($_) } @commands;
+  return wantarray ? @responses : \@responses;
+}
+
+
 ### PubSub
 sub wait_for_messages {
   my ($self, $timeout) = @_;
@@ -509,6 +533,11 @@ sub __read_response {
 
   confess("Not connected to any server") unless $self->{sock};
 
+  if ($self->{pipelined_commands}) {
+    push @{$self->{pipelined_commands}}, $cmd;
+    return bless(\$cmd, 'Redis::X::Placeholder');
+  }
+
   local $/ = "\r\n";
 
   ## no debug => fast path
@@ -533,6 +562,7 @@ sub __read_response_r {
   $$type_r = $type if $type_r;
 
   if ($type eq '-') {
+    return bless(\$result, 'Redis::X::Unthrown') if $self->{suppress_exception};
     confess "[$command] $result, ";
   }
   elsif ($type eq '+') {
@@ -664,6 +694,56 @@ sub __try_reconnect {
 1;
 
 __END__
+
+=head1 Pipelining
+
+  my @responses = $r->pipeline(sub {
+    $redis->set(clunk => "eth");
+    # ...
+  });
+
+  my $responses_arrayref = $r->pipeline(sub {
+    $redis->set(zzapp => "kapow");
+    # ...
+  });
+
+Ordinarily, methods that send commands to the Redis server will wait for the
+server's response, and return it to the caller synchronously.
+
+However, if you have a large number of commands to issue, using
+L<pipelining|http://redis.io/topics/pipelining> can make your code run
+faster: send a batch of commands to the server asynchronously, and then
+collect all the replies afterwards.
+
+The C<pipeline> method takes a single coderef as an argument, and executes
+that coderef with pipelining enabled.  Command methods issued in the
+pipeline coderef return a simple placeholder object instead of their
+expected response.  When the coderef finishes executing, the real responses
+are gathered up, and all are returned as a single list (in list context) or
+array reference (in scalar context).
+
+If a command yields an error response from the Redis server, the error
+message is returned as an instance of the class C<Redis::X::Unthrown> (as
+opposed to the usual behaviour of immediately throwing an exception
+containing the error message).  This means that you can detect an error from
+a command in the middle of a pipelined batch, and still process subsequent
+responses.  For example:
+
+  use Scalar::Util qw/blessed/;
+
+  my @responses = $r->pipeline(sub { ... });
+  for my $response (@responses) {
+    if (!blessed($response)) {
+      print "got normal response: $response\n";
+    }
+    elsif ($response->isa('Redis::X::Unthrown')) {
+      print "got error: $$response\n";
+    }
+  }
+
+If you try to use C<pipeline> from within a pipeline block, an exception is
+thrown.
+
 
 =head1 Connection Handling
 
